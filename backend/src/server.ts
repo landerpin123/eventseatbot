@@ -195,6 +195,5 @@ setInterval(() => {
 
 app.listen(PORT, () => {
   console.log(`Backend API listening on http://localhost:${PORT}`);
-  initBot();
 });
 
