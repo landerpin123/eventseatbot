@@ -35,11 +35,12 @@ function App() {
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]); // "tableId-seatId"
   const [selectedSeatIds, setSelectedSeatIds] = useState<string[]>([]); // actual seat.id values for backend
   const [selectionTotal, setSelectionTotal] = useState(0);
-  // Telegram detection state: start as 'pending' and become 'ready' or 'unavailable'
-  const [telegramStatus, setTelegramStatus] = useState<'pending' | 'ready' | 'unavailable'>('pending');
+  // Authentication finite state machine
+  const [authState, setAuthState] = useState<'init' | 'authenticating' | 'ready' | 'error'>('init');
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  // Render states: while pending show a loading screen; when unavailable show Open-in-Telegram message.
-  if (telegramStatus === 'pending') {
+  // Show loading when initializing or authenticating
+  if (authState === 'init' || authState === 'authenticating') {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
         <div className="max-w-md bg-white p-6 rounded shadow text-center">
@@ -50,59 +51,66 @@ function App() {
     );
   }
 
-  if (telegramStatus === 'unavailable') {
+  // Show blocking error when authState === 'error'
+  if (authState === 'error') {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
         <div className="max-w-md bg-white p-6 rounded shadow text-center">
-          <h2 className="text-lg font-semibold mb-3">Open in Telegram</h2>
-          <p className="text-sm text-gray-600">Please open this Web App from the Telegram mobile app or desktop client.</p>
+          <h2 className="text-lg font-semibold mb-3">Error</h2>
+          <p className="text-sm text-gray-600">{authError || 'Authentication failed. Please reopen the Web App from Telegram.'}</p>
         </div>
       </div>
     );
   }
 
-  // Poll for Telegram WebApp presence asynchronously on mount.
+  // Poll for Telegram.WebApp presence (short timeout). Presence alone starts auth.
   useEffect(() => {
     let mounted = true;
-    let found = false;
     const checkInterval = 100;
+    let elapsed = 0;
+    const timeoutMs = 1500;
+
     const poll = setInterval(() => {
       try {
         if ((window as any).Telegram && (window as any).Telegram.WebApp) {
-          found = true;
-          setTelegramStatus('ready');
+          if (mounted) setAuthState('authenticating');
           clearInterval(poll);
+          return;
         }
       } catch {}
+      elapsed += checkInterval;
+      if (elapsed >= timeoutMs) {
+        clearInterval(poll);
+        if (mounted) {
+          setAuthState('error');
+          setAuthError('This Web App must be opened from the Telegram client.');
+        }
+      }
     }, checkInterval);
 
     // immediate check
     try {
       if ((window as any).Telegram && (window as any).Telegram.WebApp) {
-        found = true;
-        setTelegramStatus('ready');
+        if (mounted) setAuthState('authenticating');
         clearInterval(poll);
       }
     } catch {}
 
-    // If not found within timeout, mark unavailable
-    const timeout = setTimeout(() => {
-      if (!found && mounted) setTelegramStatus('unavailable');
-      clearInterval(poll);
-    }, 1800);
-
     return () => {
       mounted = false;
       clearInterval(poll);
-      clearTimeout(timeout);
     };
   }, []);
 
   // When Telegram WebApp is ready, call ready() and attempt to read init data (no polling for user)
   useEffect(() => {
-    if (telegramStatus !== 'ready') return;
+    if (authState !== 'authenticating') return;
     const tg = (window as any).Telegram?.WebApp;
-    if (!tg) return;
+    if (!tg) {
+      setAuthState('error');
+      setAuthError('Telegram WebApp is not available.');
+      return;
+    }
 
     const safeReady = () => {
       try {
@@ -121,7 +129,6 @@ function App() {
         if (typeof initDataStr === 'string' && initDataStr.length) {
           try {
             const params = new URLSearchParams(initDataStr);
-            // Prefer a JSON-encoded `user` param if present
             const userParam = params.get('user');
             if (userParam) {
               try {
@@ -129,7 +136,6 @@ function App() {
                 if (u && typeof u.id !== 'undefined') return { id: Number(u.id), username: u.username };
               } catch {}
             }
-            // Fallback to user_id / userId / id fields
             const uid = params.get('user_id') || params.get('userId') || params.get('id');
             const uname = params.get('username') || params.get('user_name');
             if (uid) return { id: Number(uid), username: uname || undefined };
@@ -142,20 +148,27 @@ function App() {
     safeReady();
 
     const resolved = extractTelegramUser();
-    if (resolved) {
-      setTelegramUserId(resolved.id);
-      setCurrentUsername(resolved.username || `user_${resolved.id}`);
-      AuthService.loginWithTelegram(resolved.id)
-        .then(() => {
-          const token = AuthService.getToken();
-          const payload = AuthService.decodeToken(token);
-          setIsAdmin((payload as any)?.role === 'admin');
-          setTgReady(true);
-        })
-        .catch((err) => setClientError((err as Error)?.message || 'Authentication failed'));
-    } else {
-      setClientError('Unable to obtain Telegram user id from the client. Please reopen the Web App from Telegram.');
+    if (!resolved) {
+      // Do not poll indefinitely; if user id cannot be determined, move to error state.
+      setAuthState('error');
+      setAuthError('Unable to obtain Telegram user id from the client. Please reopen the Web App from Telegram.');
+      return;
     }
+
+    setTelegramUserId(resolved.id);
+    setCurrentUsername(resolved.username || `user_${resolved.id}`);
+    AuthService.loginWithTelegram(resolved.id)
+      .then(() => {
+        const token = AuthService.getToken();
+        const payload = AuthService.decodeToken(token);
+        setIsAdmin((payload as any)?.role === 'admin');
+        setTgReady(true);
+        setAuthState('ready');
+      })
+      .catch((err) => {
+        setAuthState('error');
+        setAuthError((err as Error)?.message || 'Authentication failed');
+      });
 
     const onAuthChanged = () => {
       const t = AuthService.getToken();
@@ -165,11 +178,8 @@ function App() {
     };
 
     window.addEventListener('auth:changed', onAuthChanged as EventListener);
-
-    return () => {
-      window.removeEventListener('auth:changed', onAuthChanged as EventListener);
-    };
-  }, [telegramStatus]);
+    return () => window.removeEventListener('auth:changed', onAuthChanged as EventListener);
+  }, [authState]);
 
   // Viewport and back-button integration when Telegram is ready
   useEffect(() => {
