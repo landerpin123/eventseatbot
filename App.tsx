@@ -36,12 +36,11 @@ function App() {
   const [selectedSeatIds, setSelectedSeatIds] = useState<string[]>([]); // actual seat.id values for backend
   const [selectionTotal, setSelectionTotal] = useState(0);
 
-  // Detect Telegram WebApp availability and user info safely
+  // Detect Telegram WebApp availability (presence only)
   const tg = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
-  const tgUser = tg?.initDataUnsafe?.user;
   const isInTelegram = Boolean(tg);
 
-  // If not opened inside Telegram, render a clear, non-technical message and avoid any console errors or network calls.
+  // If Telegram WebApp object is truly absent, render a clear, non-technical message and avoid any network calls.
   if (!isInTelegram) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
@@ -55,38 +54,62 @@ function App() {
 
   // Initial Load: authenticate via Telegram WebApp id
   useEffect(() => {
-    // Safe initialization inside Telegram
-    if (!tgUser || typeof tgUser.id === 'undefined') {
-      setClientError('Unable to read Telegram user data. Please reopen the WebApp from Telegram.');
-      return;
-    }
-
-    setTelegramUserId(tgUser.id);
-    setCurrentUsername(tgUser.username || `user_${tgUser.id}`);
+    // Initialize Telegram WebApp and attempt to read user id with safe retries.
+    // We must call ready() before reading init data.
+    if (!tg) return;
 
     let mounted = true;
+    let attempts = 0;
+    const maxAttempts = 12; // retry up to ~6 seconds (12 * 500ms)
+    const intervalMs = 500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const init = async () => {
+    const safeReady = () => {
       try {
-        // Signal Telegram that WebApp is ready (no-op if unsupported)
-        try {
-          tg?.ready?.();
-        } catch {}
-
-        // Perform login with backend using Telegram-provided id
-        await AuthService.loginWithTelegram(tgUser.id);
-        if (!mounted) return;
-        const token = AuthService.getToken();
-        const payload = AuthService.decodeToken(token);
-        setIsAdmin((payload as any)?.role === 'admin');
-        setTgReady(true);
-      } catch (err) {
-        // Surface human-friendly message; avoid console.error in production
-        setClientError((err as Error)?.message || 'Authentication failed');
-      }
+        tg.ready?.();
+      } catch {}
     };
 
-    init();
+    const readUser = async () => {
+      if (!mounted) return;
+      // Try to read user from initDataUnsafe first
+      const unsafe = (tg as any).initDataUnsafe as { user?: { id?: number; username?: string } } | undefined;
+      const uid = unsafe?.user?.id;
+      const uname = unsafe?.user?.username;
+
+      if (typeof uid !== 'undefined') {
+        setTelegramUserId(Number(uid));
+        setCurrentUsername(uname || `user_${uid}`);
+        try {
+          await AuthService.loginWithTelegram(Number(uid));
+          if (!mounted) return;
+          const token = AuthService.getToken();
+          const payload = AuthService.decodeToken(token);
+          setIsAdmin((payload as any)?.role === 'admin');
+          setTgReady(true);
+        } catch (err) {
+          setClientError((err as Error)?.message || 'Authentication failed');
+        }
+        return;
+      }
+
+      // If user is not available yet, retry briefly.
+      attempts += 1;
+      if (attempts <= maxAttempts) {
+        timer = setTimeout(() => {
+          safeReady();
+          readUser();
+        }, intervalMs);
+        return;
+      }
+
+      // After retries, surface a friendly error (do not claim we're outside Telegram)
+      setClientError('Unable to read Telegram user data. Please reopen the Web App from the Telegram client.');
+    };
+
+    // Start sequence
+    safeReady();
+    readUser();
 
     const onAuthChanged = () => {
       const t = AuthService.getToken();
@@ -99,9 +122,10 @@ function App() {
 
     return () => {
       mounted = false;
+      if (timer) clearTimeout(timer);
       window.removeEventListener('auth:changed', onAuthChanged as EventListener);
     };
-  }, []);
+  }, [tg]);
 
   useEffect(() => {
     // Refresh data every few seconds to simulate live updates (for lock expiry)
