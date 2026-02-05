@@ -26,7 +26,6 @@ function App() {
   const [currentUsername, setCurrentUsername] = useState<string>('guest');
   const [telegramUserId, setTelegramUserId] = useState<number | null>(null);
   const [tgReady, setTgReady] = useState(false);
-  const [telegramStatus, setTelegramStatus] = useState<'pending' | 'ready' | 'error'>('pending');
   const [clientError, setClientError] = useState<string | null>(null);
 
   const [events, setEvents] = useState<EventData[]>([]);
@@ -40,29 +39,7 @@ function App() {
   const [authState, setAuthState] = useState<'init' | 'authenticating' | 'ready' | 'error'>('init');
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Show loading when initializing or authenticating
-  if (authState === 'init' || authState === 'authenticating') {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-        <div className="max-w-md bg-white p-6 rounded shadow text-center">
-          <h2 className="text-lg font-semibold mb-3">Loading…</h2>
-          <p className="text-sm text-gray-600">Initializing Telegram Web App integration.</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Show blocking error when authState === 'error'
-  if (authState === 'error') {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-        <div className="max-w-md bg-white p-6 rounded shadow text-center">
-          <h2 className="text-lg font-semibold mb-3">Error</h2>
-          <p className="text-sm text-gray-600">{authError || 'Authentication failed. Please reopen the Web App from Telegram.'}</p>
-        </div>
-      </div>
-    );
-  }
+  // Do not return early — render loading/error states inside main JSX
 
   // Poll for Telegram.WebApp presence (short timeout). Presence alone starts auth.
   useEffect(() => {
@@ -85,7 +62,6 @@ function App() {
         if (mounted) {
           setAuthState('error');
           setAuthError('This Web App must be opened from the Telegram client.');
-          setTelegramStatus('error');
         }
       }
     }, checkInterval);
@@ -111,7 +87,7 @@ function App() {
     if (!tg) {
       setAuthState('error');
       setAuthError('Telegram WebApp is not available.');
-      setTelegramStatus('error');
+      
       return;
     }
 
@@ -150,7 +126,7 @@ function App() {
 
     // Call ready() and mark Telegram SDK as ready for viewport integration
     safeReady();
-    setTelegramStatus('ready');
+    setTgReady(true);
 
     const resolved = extractTelegramUser();
     if (!resolved) {
@@ -186,9 +162,9 @@ function App() {
     return () => window.removeEventListener('auth:changed', onAuthChanged as EventListener);
   }, [authState]);
 
-  // Viewport and back-button integration when Telegram is ready
+  // Viewport and back-button integration when Telegram is ready (tgReady toggled after ready())
   useEffect(() => {
-    if (telegramStatus !== 'ready') return;
+    if (!tgReady) return;
     const tg = (window as any).Telegram?.WebApp;
     if (!tg) return;
 
@@ -221,7 +197,7 @@ function App() {
       }
       window.removeEventListener('resize', updateViewport);
     };
-  }, [telegramStatus]);
+  }, [tgReady]);
 
   useEffect(() => {
     // Refresh data every few seconds to simulate live updates (for lock expiry)
@@ -523,6 +499,25 @@ function App() {
   // Main Render Switch
   return (
     <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-2xl relative">
+      {/* Loading overlay (renders inside main tree so hooks always run) */}
+      {(authState === 'init' || authState === 'authenticating') && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-50">
+          <div className="max-w-md bg-white p-6 rounded shadow text-center">
+            <h2 className="text-lg font-semibold mb-3">Loading…</h2>
+            <p className="text-sm text-gray-600">Initializing Telegram Web App integration.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Error overlay */}
+      {authState === 'error' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-50">
+          <div className="max-w-md bg-white p-6 rounded shadow text-center">
+            <h2 className="text-lg font-semibold mb-3">Error</h2>
+            <p className="text-sm text-gray-600">{authError || 'Authentication failed. Please reopen the Web App from Telegram.'}</p>
+          </div>
+        </div>
+      )}
       
       {/* Dev Toggle */}
       {/* Telegram WebApp is the only auth entrypoint; admin UI shown only when backend grants role */}
