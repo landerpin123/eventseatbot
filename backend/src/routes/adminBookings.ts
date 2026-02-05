@@ -15,7 +15,8 @@ router.get('/bookings', (_req: Request, res: Response) => {
 
 // POST /admin/bookings/:id/confirm
 router.post('/bookings/:id/confirm', (req: Request, res: Response) => {
-  const id = req.params.id;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
   const booking = inMemoryBookings.find((b) => b.id === id);
   if (!booking) return res.status(404).json({ error: 'Booking not found' });
   if (booking.status !== 'reserved') return res.status(400).json({ error: 'Only reserved bookings can be confirmed' });

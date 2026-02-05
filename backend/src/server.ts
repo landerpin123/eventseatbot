@@ -2,21 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import { v4 as uuid } from 'uuid';
-import type { Booking, EventData } from './models';
-import {
-  getEvents,
-  findEventById,
-  saveEvents,
-  getBookings,
-  addBooking,
-  updateBookingStatus,
-} from './db';
+import type { EventData } from './models';
+import { getEvents, findEventById, saveEvents, getBookings } from './db';
 import { bot, notifyAdminsAboutBooking, notifyUser } from './bot';
 import adminEventsRouter from './routes/adminEvents';
 import adminSeatsRouter, { seats as inMemorySeats } from './routes/adminSeats';
 import adminBookingsRouter from './routes/adminBookings';
 import { inMemoryBookings } from './state';
-import { authMiddleware } from './auth/auth.middleware';
+import { authMiddleware, AuthRequest } from './auth/auth.middleware';
 import 'dotenv/config';
 import authRoutes from './auth/auth.routes';
 import { startBookingExpirationJob } from './jobs/bookingExpiration.job';
@@ -80,10 +73,11 @@ app.get('/events/:eventId', (req, res) => {
 // ==============================
 // CREATE BOOKING (user-facing)
 // ==============================
-app.post('/bookings', authMiddleware, (req, res) => {
-  const user = (req as any).user;
-  const userId = user?.sub ?? user?.id ?? user?.userId;
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+app.post('/bookings', authMiddleware, (req: AuthRequest, res) => {
+  const user = req.user;
+  const userIdVal = user?.id ?? user?.sub ?? user?.userId;
+  if (!userIdVal) return res.status(401).json({ error: 'Unauthorized' });
+  const userId = String(userIdVal);
 
   const { eventId, seatIds } = req.body as { eventId: string; seatIds: string[] };
   if (!eventId || !Array.isArray(seatIds) || seatIds.length === 0) {
@@ -113,7 +107,7 @@ app.post('/bookings', authMiddleware, (req, res) => {
     s.status = 'reserved';
   }
 
-  const booking: InMemoryBooking = {
+  const booking: import('./state').InMemoryBooking = {
     id: uuid(),
     eventId,
     userId,

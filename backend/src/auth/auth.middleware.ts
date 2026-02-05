@@ -1,8 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
+export interface UserPayload {
+  id?: string | number;
+  sub?: string | number;
+  userId?: string | number;
+  role?: string;
+  iat?: number;
+  exp?: number;
+  [key: string]: unknown;
+}
+
 export interface AuthRequest extends Request {
-  user?: any;
+  user?: UserPayload;
 }
 
 export function authMiddleware(
@@ -17,9 +27,16 @@ export function authMiddleware(
   }
 
   const token = authHeader.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({ error: 'JWT_SECRET not configured' });
+  }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!);
+    const payload = jwt.verify(token, secret) as UserPayload;
     req.user = payload;
     next();
   } catch {

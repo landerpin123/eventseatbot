@@ -21,13 +21,14 @@ export const seats: Seat[] = [];
 // Protect all admin seat routes
 router.use(authMiddleware, adminOnly);
 
-const validateSeatInput = (s: any) => {
+const validateSeatInput = (s: unknown) => {
   const errs: string[] = [];
   if (!s || typeof s !== 'object') return ['invalid seat object'];
-  if (!s.eventId || typeof s.eventId !== 'string') errs.push('eventId is required');
-  if (typeof s.row === 'undefined' || (typeof s.row !== 'string' && typeof s.row !== 'number')) errs.push('row is required');
-  if (typeof s.number !== 'number' || Number.isNaN(s.number)) errs.push('number must be a number');
-  if (typeof s.price !== 'number' || Number.isNaN(s.price)) errs.push('price must be a number');
+  const seat = s as Record<string, unknown>;
+  if (!seat.eventId || typeof seat.eventId !== 'string') errs.push('eventId is required');
+  if (typeof seat.row === 'undefined' || (typeof seat.row !== 'string' && typeof seat.row !== 'number')) errs.push('row is required');
+  if (typeof seat.number !== 'number' || Number.isNaN(seat.number as number)) errs.push('number must be a number');
+  if (typeof seat.price !== 'number' || Number.isNaN(seat.price as number)) errs.push('price must be a number');
   return errs;
 };
 

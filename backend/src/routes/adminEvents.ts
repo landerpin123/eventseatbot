@@ -18,15 +18,16 @@ const router = Router();
 // Protect all admin event routes
 router.use(authMiddleware, adminOnly);
 
-const validate = (body: any) => {
+const validate = (body: unknown) => {
   const errors: string[] = [];
   if (!body || typeof body !== 'object') {
     errors.push('Invalid body');
     return errors;
   }
-  if (!body.title || typeof body.title !== 'string') errors.push('title is required');
-  if (!body.description || typeof body.description !== 'string') errors.push('description is required');
-  if (!body.date || typeof body.date !== 'string' || Number.isNaN(Date.parse(body.date))) errors.push('date is required (ISO string)');
+  const b = body as Record<string, unknown>;
+  if (!b.title || typeof b.title !== 'string') errors.push('title is required');
+  if (!b.description || typeof b.description !== 'string') errors.push('description is required');
+  if (!b.date || typeof b.date !== 'string' || Number.isNaN(Date.parse(b.date as string))) errors.push('date is required (ISO string)');
   return errors;
 };
 
@@ -64,7 +65,12 @@ router.post('/events', (req: Request, res: Response) => {
 
 // PUT /admin/events/:id
 router.put('/events/:id', (req: Request, res: Response) => {
-  const id = req.params.id;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Event id is required' });
+  }
   const existing = findEventById(id);
   if (!existing) return res.status(404).json({ error: 'Event not found' });
 
@@ -86,7 +92,8 @@ router.put('/events/:id', (req: Request, res: Response) => {
 
 // DELETE /admin/events/:id
 router.delete('/events/:id', (req: Request, res: Response) => {
-  const id = req.params.id;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
   const events = getEvents();
   const idx = events.findIndex((e) => e.id === id);
   if (idx === -1) return res.status(404).json({ error: 'Event not found' });
