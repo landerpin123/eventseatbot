@@ -45,30 +45,51 @@ router.post('/dev-user-login', (req, res) => {
 });
 
 router.post('/telegram', (req, res) => {
-  const { telegramId } = req.body;
+  // Guard against missing body (ensure JSON parsing worked) and accept fallback query params
+  const body = req && typeof req.body === 'object' ? req.body : {};
+  let rawId: unknown = body.telegramId ?? body.telegram_id ?? body.userId ?? body.user_id ?? body.id ?? req.query?.telegramId ?? req.query?.telegram_id ?? req.query?.userId ?? req.query?.user_id ?? req.query?.id;
 
-  if (!telegramId) {
-    return res.status(400).json({ error: 'telegramId is required' });
+  if (rawId === undefined || rawId === null) {
+    return res.status(400).json({ error: 'telegramId is required and must be provided in the request body or query string' });
+  }
+
+  // Normalize: accept numbers or numeric strings; trim strings
+  if (typeof rawId === 'string') rawId = rawId.trim();
+
+  if (rawId === '') {
+    return res.status(400).json({ error: 'telegramId must not be empty' });
+  }
+
+  // Try numeric normalization first; fall back to string id
+  const asNumber = Number(rawId as any);
+  const normalizedId: number | string = Number.isFinite(asNumber) ? asNumber : String(rawId);
+
+  // Ensure JWT secret is present
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({ error: 'Server misconfiguration: JWT secret not set' });
   }
 
   const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '')
     .split(',')
-    .map((id) => id.trim());
+    .map((id) => id.trim())
+    .filter(Boolean);
 
-  const role = adminIds.includes(String(telegramId))
-    ? 'admin'
-    : 'user';
+  const role = adminIds.includes(String(normalizedId)) ? 'admin' : 'user';
 
-  const token = jwt.sign(
-    {
-      id: String(telegramId),
-      role,
-    },
-    process.env.JWT_SECRET!,
-    { expiresIn: '12h' }
-  );
+  try {
+    const token = jwt.sign(
+      {
+        id: String(normalizedId),
+        role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '12h' }
+    );
 
-  res.json({ token, role });
+    return res.json({ token, role });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to generate token' });
+  }
 });
 
 
