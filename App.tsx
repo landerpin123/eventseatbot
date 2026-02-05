@@ -98,17 +98,11 @@ function App() {
     };
   }, []);
 
-  // When Telegram WebApp is ready, call ready() and attempt to read init data (with retries for user)
+  // When Telegram WebApp is ready, call ready() and attempt to read init data (no polling for user)
   useEffect(() => {
     if (telegramStatus !== 'ready') return;
     const tg = (window as any).Telegram?.WebApp;
     if (!tg) return;
-
-    let mounted = true;
-    let attempts = 0;
-    const maxAttempts = 12;
-    const intervalMs = 500;
-    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const safeReady = () => {
       try {
@@ -116,42 +110,52 @@ function App() {
       } catch {}
     };
 
-    const readUser = async () => {
-      if (!mounted) return;
-      const unsafe = (tg as any).initDataUnsafe as { user?: { id?: number; username?: string } } | undefined;
-      const uid = unsafe?.user?.id;
-      const uname = unsafe?.user?.username;
+    const extractTelegramUser = (): { id: number; username?: string } | null => {
+      try {
+        const unsafe = (tg as any).initDataUnsafe as { user?: { id?: number; username?: string } } | undefined;
+        if (unsafe?.user && typeof unsafe.user.id !== 'undefined') {
+          return { id: Number(unsafe.user.id), username: unsafe.user.username };
+        }
 
-      if (typeof uid !== 'undefined') {
-        setTelegramUserId(Number(uid));
-        setCurrentUsername(uname || `user_${uid}`);
-        try {
-          await AuthService.loginWithTelegram(Number(uid));
-          if (!mounted) return;
+        const initDataStr = (tg as any).initData as string | undefined;
+        if (typeof initDataStr === 'string' && initDataStr.length) {
+          try {
+            const params = new URLSearchParams(initDataStr);
+            // Prefer a JSON-encoded `user` param if present
+            const userParam = params.get('user');
+            if (userParam) {
+              try {
+                const u = JSON.parse(userParam);
+                if (u && typeof u.id !== 'undefined') return { id: Number(u.id), username: u.username };
+              } catch {}
+            }
+            // Fallback to user_id / userId / id fields
+            const uid = params.get('user_id') || params.get('userId') || params.get('id');
+            const uname = params.get('username') || params.get('user_name');
+            if (uid) return { id: Number(uid), username: uname || undefined };
+          } catch {}
+        }
+      } catch {}
+      return null;
+    };
+
+    safeReady();
+
+    const resolved = extractTelegramUser();
+    if (resolved) {
+      setTelegramUserId(resolved.id);
+      setCurrentUsername(resolved.username || `user_${resolved.id}`);
+      AuthService.loginWithTelegram(resolved.id)
+        .then(() => {
           const token = AuthService.getToken();
           const payload = AuthService.decodeToken(token);
           setIsAdmin((payload as any)?.role === 'admin');
           setTgReady(true);
-        } catch (err) {
-          setClientError((err as Error)?.message || 'Authentication failed');
-        }
-        return;
-      }
-
-      attempts += 1;
-      if (attempts <= maxAttempts) {
-        timer = setTimeout(() => {
-          safeReady();
-          readUser();
-        }, intervalMs);
-        return;
-      }
-
-      setClientError('Unable to read Telegram user data. Please reopen the Web App from the Telegram client.');
-    };
-
-    safeReady();
-    readUser();
+        })
+        .catch((err) => setClientError((err as Error)?.message || 'Authentication failed'));
+    } else {
+      setClientError('Unable to obtain Telegram user id from the client. Please reopen the Web App from Telegram.');
+    }
 
     const onAuthChanged = () => {
       const t = AuthService.getToken();
@@ -163,8 +167,6 @@ function App() {
     window.addEventListener('auth:changed', onAuthChanged as EventListener);
 
     return () => {
-      mounted = false;
-      if (timer) clearTimeout(timer);
       window.removeEventListener('auth:changed', onAuthChanged as EventListener);
     };
   }, [telegramStatus]);
